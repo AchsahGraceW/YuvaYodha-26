@@ -19,14 +19,14 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 
 // Initial 24-Hour Microgrid Simulation Data Profile
 const initialChartData = [
-  { time: '00:00', solar: 0, demand: 120, battery: 45 },
-  { time: '03:00', solar: 0, demand: 95, battery: 40 },
-  { time: '06:00', solar: 45, demand: 180, battery: 35 },
-  { time: '09:00', solar: 320, demand: 280, battery: 60 },
-  { time: '12:00', solar: 540, demand: 310, battery: 88 },
-  { time: '15:00', solar: 480, demand: 390, battery: 95 },
-  { time: '18:00', solar: 180, demand: 420, battery: 70 },
-  { time: '21:00', solar: 10, demand: 260, battery: 52 },
+  { time: '00:00', solar: 0, demand: 120, effective: 100, battery: 45 },
+  { time: '03:00', solar: 0, demand: 95, effective: 80, battery: 40 },
+  { time: '06:00', solar: 45, demand: 180, effective: 150, battery: 35 },
+  { time: '09:00', solar: 320, demand: 280, effective: 250, battery: 60 },
+  { time: '12:00', solar: 540, demand: 310, effective: 280, battery: 88 },
+  { time: '15:00', solar: 480, demand: 390, effective: 350, battery: 95 },
+  { time: '18:00', solar: 180, demand: 420, effective: 380, battery: 70 },
+  { time: '21:00', solar: 10, demand: 260, effective: 240, battery: 52 },
 ];
 
 export default function EcoGridDashboard() {
@@ -39,11 +39,17 @@ export default function EcoGridDashboard() {
   // Dynamic Telemetry State from FastAPI Backend
   const [telemetry, setTelemetry] = useState({
     solar_kw: 540.0,
-    load_kw: 310.0,
-    bess_soc_pct: 88.0,
+    raw_load_kw: 310.0,
+    effective_load_kw: 310.0,
+    bess: {
+      action: 'IDLE',
+      power_kw: 0.0,
+      soc_pct: 88.0,
+      capacity_kwh: 500.0
+    },
     carbon_offset_kg: 1420.0,
-    status: 'OPTIMAL',
-    peak_shaving_active: true
+    peak_shaving_active: false,
+    grid_status: 'STABLE'
   });
   const [isLiveConnected, setIsLiveConnected] = useState(false);
 
@@ -88,7 +94,7 @@ export default function EcoGridDashboard() {
               SCHNEIDER ELECTRIC YUVA YODHA 2026
             </span>
             <span className="flex items-center gap-1.5 text-xs text-slate-400 bg-slate-900 px-2.5 py-1 rounded-full border border-slate-800">
-              <span className={`w-2 h-2 rounded-full ${isLiveConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'}`}></span>
+              <span className={isLiveConnected ? 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse' : 'w-2 h-2 rounded-full bg-amber-400'}></span>
               {isLiveConnected ? 'Live FastApi Stream' : 'Offline Simulation'}
             </span>
           </div>
@@ -122,6 +128,29 @@ export default function EcoGridDashboard() {
         </div>
       </header>
 
+      {/* Peak-Shaving Status Banner */}
+      <div className={telemetry.peak_shaving_active ? 'mb-4 px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-between bg-amber-500/20 text-amber-400 border border-amber-500/40' : 'mb-4 px-4 py-2 rounded-lg text-sm font-medium flex items-center justify-between bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'}>
+        <span className="flex items-center gap-2">
+          {telemetry.peak_shaving_active ? (
+            <>
+              <AlertTriangle className="w-4 h-4" />
+              <span>Peak Shaving Active</span>
+            </>
+          ) : (
+            <>
+              <ShieldCheck className="w-4 h-4" />
+              <span>Grid Stable</span>
+            </>
+          )}
+        </span>
+        <span className="text-xs">
+          {telemetry.peak_shaving_active ?
+            'Battery discharging at ' + telemetry.bess.power_kw + ' kW to maintain load below ' + telemetry.peak_threshold_kw + ' kW' :
+            'Load effectively managed: ' + telemetry.effective_load_kw + ' kW'
+          }
+        </span>
+      </div>
+
       {/* Main Grid Content */}
       <main className="space-y-8">
         {/* Metric Cards Row */}
@@ -145,14 +174,20 @@ export default function EcoGridDashboard() {
             </div>
           </div>
 
-          {/* Card 2: Load Demand */}
+          {/* Card 2: Feeder Load vs Effective Load */}
           <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 relative overflow-hidden group hover:border-emerald-500/50 transition-all">
             <div className="flex justify-between items-start">
               <div>
-                <p className="text-xs text-slate-400 font-medium">Microgrid Load</p>
-                <h3 className="text-2xl font-bold mt-1 text-white">
-                  {telemetry.load_kw} <span className="text-xs font-normal text-slate-400">kW</span>
-                </h3>
+                <p className="text-xs text-slate-400 font-medium">Feeder Load vs Effective Load</p>
+                <div className="space-y-1">
+                  <h3 className="text-xl font-bold mt-1 text-white">
+                    {telemetry.raw_load_kw} <span className="text-xs font-normal text-slate-400">kW</span>
+                  </h3>
+                  <p className="text-xs text-slate-400 flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
+                    <span>Effective: {telemetry.effective_load_kw} kW</span>
+                  </p>
+                </div>
               </div>
               <div className="p-3 bg-cyan-500/10 rounded-xl text-cyan-400 border border-cyan-500/20">
                 <Zap className="w-5 h-5" />
@@ -160,7 +195,7 @@ export default function EcoGridDashboard() {
             </div>
             <div className="mt-4 flex items-center text-xs text-slate-400 gap-1 font-medium">
               <Activity className="w-3.5 h-3.5 text-cyan-400" />
-              <span>Balanced grid load</span>
+              <span>Peak shaving: {telemetry.bess.action === 'DISCHARGING' ? 'Active' : 'Normal'}</span>
             </div>
           </div>
 
@@ -170,16 +205,26 @@ export default function EcoGridDashboard() {
               <div>
                 <p className="text-xs text-slate-400 font-medium">BESS Storage State</p>
                 <h3 className="text-2xl font-bold mt-1 text-white">
-                  {telemetry.bess_soc_pct} <span className="text-xs font-normal text-slate-400">%</span>
+                  {telemetry.bess.soc_pct} <span className="text-xs font-normal text-slate-400">%</span>
                 </h3>
               </div>
-              <div className="p-3 bg-emerald-500/10 rounded-xl text-emerald-400 border border-emerald-500/20">
+              <div className="p-3 bg-emerald-500/10 rounded-xl text-emerald-400 border border-emerald-500/20 relative">
                 <Battery className="w-5 h-5" />
+                {telemetry.bess.action === 'CHARGING' && (
+                  <span className="absolute -top-2 -right-2 bg-green-500 text-xs text-white rounded-full w-5 h-5 flex items-center justify-center">
+                    ⚡
+                  </span>
+                )}
+                {telemetry.bess.action === 'DISCHARGING' && (
+                  <span className="absolute -top-2 -right-2 bg-amber-500 text-xs text-white rounded-full w-5 h-5 flex items-center justify-center">
+                    ▼
+                  </span>
+                )}
               </div>
             </div>
             <div className="mt-4 flex items-center text-xs text-emerald-400 gap-1 font-medium">
               <ShieldCheck className="w-3.5 h-3.5" />
-              <span>Optimal reserve stored</span>
+              <span>{telemetry.bess.action === 'CHARGING' ? 'Charging' : telemetry.bess.action === 'DISCHARGING' ? 'Discharging' : 'Idle'}</span>
             </div>
           </div>
 
@@ -210,14 +255,17 @@ export default function EcoGridDashboard() {
             <div className="flex items-center justify-between mb-6">
               <div>
                 <h2 className="text-lg font-bold text-white">24-Hour Energy Telemetry Profile</h2>
-                <p className="text-xs text-slate-400">Solar generation curve vs microgrid demand profile</p>
+                <p className="text-xs text-slate-400">Solar generation vs feeder load vs effective load</p>
               </div>
               <div className="flex items-center gap-4 text-xs">
                 <span className="flex items-center gap-1.5 text-amber-400">
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span> Solar Output
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400"></span> Solar Generation
                 </span>
                 <span className="flex items-center gap-1.5 text-cyan-400">
-                  <span className="w-2.5 h-2.5 rounded-full bg-cyan-400"></span> Load Demand
+                  <span className="w-2.5 h-2.5 rounded-full bg-cyan-400"></span> Feeder Load (Raw)
+                </span>
+                <span className="flex items-center gap-1.5 text-emerald-400">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400"></span> Effective Load
                 </span>
               </div>
             </div>
@@ -230,9 +278,13 @@ export default function EcoGridDashboard() {
                       <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.4} />
                       <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.0} />
                     </linearGradient>
-                    <linearGradient id="demandGradient" x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient id="feederLoadGradient" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.4} />
                       <stop offset="95%" stopColor="#06b6d4" stopOpacity={0.0} />
+                    </linearGradient>
+                    <linearGradient id="effectiveLoadGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0.0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
@@ -243,7 +295,8 @@ export default function EcoGridDashboard() {
                     itemStyle={{ color: '#f8fafc' }}
                   />
                   <Area type="monotone" dataKey="solar" stroke="#f59e0b" strokeWidth={2} fillOpacity={1} fill="url(#solarGradient)" />
-                  <Area type="monotone" dataKey="demand" stroke="#06b6d4" strokeWidth={2} fillOpacity={1} fill="url(#demandGradient)" />
+                  <Area type="monotone" dataKey="demand" stroke="#06b6d4" strokeWidth={2} fillOpacity={1} fill="url(#feederLoadGradient)" />
+                  <Area type="monotone" dataKey="effective" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#effectiveLoadGradient)" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -258,7 +311,7 @@ export default function EcoGridDashboard() {
               <div className="space-y-4">
                 <div className="flex items-center justify-between p-3.5 bg-slate-950 rounded-xl border border-slate-800">
                   <div className="flex items-center gap-3">
-                    <Power className={`w-4 h-4 ${gridExport ? 'text-emerald-400' : 'text-slate-500'}`} />
+                    <Power className={gridExport ? 'w-4 h-4 text-emerald-400' : 'w-4 h-4 text-slate-500'} />
                     <div>
                       <p className="text-sm font-semibold text-slate-200">Grid Export</p>
                       <p className="text-[10px] text-slate-400">Feed excess solar energy back to grid</p>
@@ -266,8 +319,8 @@ export default function EcoGridDashboard() {
                   </div>
                   <button
                     onClick={() => setGridExport(!gridExport)}
-                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${gridExport ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'
-                      }`}
+                    className={gridExport ? 'px-3 py-1 rounded-lg text-xs font-semibold transition bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'px-3 py-1 rounded-lg text-xs font-semibold transition bg-slate-800 text-slate-400'
+                    }
                   >
                     {gridExport ? 'ENABLED' : 'OFF'}
                   </button>
@@ -275,7 +328,7 @@ export default function EcoGridDashboard() {
 
                 <div className="flex items-center justify-between p-3.5 bg-slate-950 rounded-xl border border-slate-800">
                   <div className="flex items-center gap-3">
-                    <Battery className={`w-4 h-4 ${batteryDischarge ? 'text-emerald-400' : 'text-slate-500'}`} />
+                    <Battery className={batteryDischarge ? 'w-4 h-4 text-emerald-400' : 'w-4 h-4 text-slate-500'} />
                     <div>
                       <p className="text-sm font-semibold text-slate-200">BESS Peak Discharge</p>
                       <p className="text-[10px] text-slate-400">Auto-discharge battery during high tariff</p>
@@ -283,8 +336,8 @@ export default function EcoGridDashboard() {
                   </div>
                   <button
                     onClick={() => setBatteryDischarge(!batteryDischarge)}
-                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${batteryDischarge ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'
-                      }`}
+                    className={batteryDischarge ? 'px-3 py-1 rounded-lg text-xs font-semibold transition bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'px-3 py-1 rounded-lg text-xs font-semibold transition bg-slate-800 text-slate-400'
+                    }
                   >
                     {batteryDischarge ? 'ENABLED' : 'OFF'}
                   </button>
@@ -292,7 +345,7 @@ export default function EcoGridDashboard() {
 
                 <div className="flex items-center justify-between p-3.5 bg-slate-950 rounded-xl border border-slate-800">
                   <div className="flex items-center gap-3">
-                    <Car className={`w-4 h-4 ${evStation ? 'text-emerald-400' : 'text-slate-500'}`} />
+                    <Car className={evStation ? 'w-4 h-4 text-emerald-400' : 'w-4 h-4 text-slate-500'} />
                     <div>
                       <p className="text-sm font-semibold text-slate-200">EV Fleet Charger</p>
                       <p className="text-[10px] text-slate-400">Prioritize smart charging dock</p>
@@ -300,8 +353,8 @@ export default function EcoGridDashboard() {
                   </div>
                   <button
                     onClick={() => setEvStation(!evStation)}
-                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${evStation ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-slate-800 text-slate-400'
-                      }`}
+                    className={evStation ? 'px-3 py-1 rounded-lg text-xs font-semibold transition bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'px-3 py-1 rounded-lg text-xs font-semibold transition bg-slate-800 text-slate-400'
+                    }
                   >
                     {evStation ? 'ACTIVE' : 'IDLE'}
                   </button>
