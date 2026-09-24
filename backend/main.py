@@ -1,9 +1,8 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-import random
-import threading
+import math
 
-app = FastAPI(title="EcoGrid AI Simulation Engine")
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
@@ -13,93 +12,106 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Simulated Battery State (BESS)
-bess_state = {
-    "capacity_kwh": 500.0,
-    "current_charge_kwh": 400.0,  # Starts at 80% SoC
-    "max_discharge_kw": 100.0,
-    "max_charge_kw": 100.0,
-    "discom_override_mode": "AUTO"
-}
+# Global simulation state
+simulation_tick = 360  # Start at 06:00 AM
+bess_soc_kwh = 400.0   # 80% of 500 kWh
+accumulated_carbon_offset_kg = 0.0
+accumulated_cost_savings_inr = 0.0
 
-# Thread lock for state safety
-state_lock = threading.Lock()
+CEA_EMISSION_FACTOR = 0.716  # kg CO2 / kWh
+PEAK_TARIFF_INR = 9.50      
+OFF_PEAK_TARIFF_INR = 4.50  
 
 @app.get("/")
-def read_root():
-    return {"status": "EcoGrid AI Engine Running", "version": "1.3.0"}
+def health_check():
+    return {"status": "EcoGrid AI Engine Online", "version": "2.0.0"}
 
 @app.get("/api/telemetry")
-def get_telemetry(override: str = Query(default="AUTO")):
-    with state_lock:
-        override_clean = override.upper().strip()
-        bess_state["discom_override_mode"] = override_clean
+def get_telemetry(override: str = "AUTO", ev_mode: str = "SMART"):
+    global simulation_tick, bess_soc_kwh, accumulated_carbon_offset_kg, accumulated_cost_savings_inr
+    
+    # Advance time by 10 simulation minutes per tick
+    simulation_tick = (simulation_tick + 10) % 1440  
+    hour = simulation_tick / 60.0
+    
+    # 1. Solar Curve
+    solar_kw = max(0.0, 480.0 * math.exp(-0.5 * ((hour - 13.0) / 2.2) ** 2))
+    if solar_kw < 2.0:
+        solar_kw = 0.0
+
+    # 2. EV Fleet Demand Curve
+    if ev_mode == "FAST":
+        ev_load_kw = 120.0
+    elif ev_mode == "ECO":
+        ev_load_kw = 30.0
+    else:  # SMART AI Mode
+        ev_load_kw = 30.0 if hour >= 17.0 and hour <= 21.0 else 90.0
+
+    # 3. Dual-Peak Feeder Load Curve (including EV load)
+    base_load = 220.0 + ev_load_kw
+    morning_peak = 190.0 * math.exp(-0.5 * ((hour - 9.0) / 1.5) ** 2)
+    evening_peak = 360.0 * math.exp(-0.5 * ((hour - 19.0) / 1.8) ** 2)
+    raw_load_kw = base_load + morning_peak + evening_peak
+    
+    peak_threshold_kw = 450.0
+    bess_power_kw = 0.0
+    action = "IDLE"
+    
+    # 4. Dynamic BESS Dispatch
+    net_demand = raw_load_kw - solar_kw
+    interval_hours = 10 / 60.0
+    
+    if override == "FORCE_DISCHARGE" or (net_demand > peak_threshold_kw and bess_soc_kwh > 50.0):
+        bess_power_kw = min(120.0, max(40.0, net_demand - peak_threshold_kw + 30.0))
+        discharged_kwh = bess_power_kw * interval_hours
+        bess_soc_kwh = max(50.0, bess_soc_kwh - discharged_kwh)
         
-        # Environmental feeds
-        solar_gen = round(random.uniform(120.0, 550.0), 1)
-        grid_load = round(random.uniform(300.0, 600.0), 1)
-        peak_threshold_kw = 450.0
-        net_demand = grid_load - solar_gen
-        
-        current_soc_pct = round((bess_state["current_charge_kwh"] / bess_state["capacity_kwh"]) * 100, 1)
-        bess_action = "IDLE"
-        bess_power_kw = 0.0
+        action = "DISCHARGING (DISCOM OVERRIDE)" if override == "FORCE_DISCHARGE" else "DISCHARGING (AI PEAK-SHAVING)"
+        accumulated_carbon_offset_kg += (discharged_kwh * CEA_EMISSION_FACTOR)
+        savings_per_kwh = PEAK_TARIFF_INR - OFF_PEAK_TARIFF_INR
+        accumulated_cost_savings_inr += (discharged_kwh * savings_per_kwh)
 
-        # 1. Check DISCOM Manual Overrides First
-        if override_clean == "FORCE_DISCHARGE" and current_soc_pct > 5.0:
-            bess_action = "DISCHARGING (DISCOM OVERRIDE)"
-            bess_power_kw = min(grid_load, bess_state["max_discharge_kw"])
-            bess_state["current_charge_kwh"] -= (bess_power_kw * (3 / 3600))
-            
-        elif override_clean == "FORCE_CHARGE" and current_soc_pct < 98.0:
-            bess_action = "CHARGING (DISCOM OVERRIDE)"
-            bess_power_kw = bess_state["max_charge_kw"]
-            bess_state["current_charge_kwh"] += (bess_power_kw * (3 / 3600))
-            
-        else:
-            # 2. Standard AI Peak-Shaving Logic
-            if grid_load > peak_threshold_kw and current_soc_pct > 15.0:
-                needed_shave = grid_load - peak_threshold_kw
-                bess_power_kw = min(needed_shave, bess_state["max_discharge_kw"])
-                bess_action = "DISCHARGING (AI PEAK-SHAVE)"
-                bess_state["current_charge_kwh"] -= (bess_power_kw * (3 / 3600))
-                
-            elif net_demand < 0 and current_soc_pct < 95.0:
-                excess_solar = abs(net_demand)
-                bess_power_kw = min(excess_solar, bess_state["max_charge_kw"])
-                bess_action = "CHARGING (SOLAR ABSORPTION)"
-                bess_state["current_charge_kwh"] += (bess_power_kw * (3 / 3600))
+    elif override == "FORCE_CHARGE" or (solar_kw > raw_load_kw and bess_soc_kwh < 500.0):
+        excess_solar = solar_kw - raw_load_kw
+        bess_power_kw = min(80.0, excess_solar)
+        charged_kwh = bess_power_kw * interval_hours
+        bess_soc_kwh = min(500.0, bess_soc_kwh + charged_kwh)
+        action = "CHARGING (DISCOM OVERRIDE)" if override == "FORCE_CHARGE" else "CHARGING (SOLAR ABSORPTION)"
 
-        # SoC Boundary checks
-        bess_state["current_charge_kwh"] = max(0.0, min(bess_state["capacity_kwh"], bess_state["current_charge_kwh"]))
-        final_soc_pct = round((bess_state["current_charge_kwh"] / bess_state["capacity_kwh"]) * 100, 1)
+    effective_load_kw = max(0.0, raw_load_kw - (bess_power_kw if "DISCHARGING" in action else 0.0))
+    soc_pct = round((bess_soc_kwh / 500.0) * 100, 1)
 
-        effective_grid_load = max(0.0, grid_load - (bess_power_kw if "DISCHARGING" in bess_action else 0.0))
-        
-        # Realistic CEA Grid Carbon Offset Formula (gCO2/kWh -> kg CO2)
-        displaced_kwh = (bess_power_kw * (3 / 3600)) + (solar_gen * (3 / 3600))
-        carbon_saved = round(1400 + (displaced_kwh * 0.716), 1)
+    # 5. Grid Status Emission
+    if effective_load_kw > peak_threshold_kw:
+        grid_status = "CRITICAL_OVERLOAD"
+    elif "DISCHARGING" in action:
+        grid_status = "PEAK_SHAVING_ACTIVE"
+    else:
+        grid_status = "OPTIMAL"
 
-        # Matched Grid Alert Status Strings (Aligns perfectly with Next.js page.tsx)
-        if effective_grid_load > peak_threshold_kw:
-            grid_status = "CRITICAL_OVERLOAD"
-        elif "DISCHARGING" in bess_action:
-            grid_status = "PEAK_SHAVING_ACTIVE"
-        else:
-            grid_status = "OPTIMAL"
+    hours_int = int(hour)
+    mins_int = int((hour % 1) * 60)
+    time_str = f"{hours_int:02d}:{mins_int:02d}"
 
-        return {
-            "solar_kw": solar_gen,
-            "raw_load_kw": grid_load,
-            "effective_load_kw": round(effective_grid_load, 1),
-            "peak_threshold_kw": peak_threshold_kw,
-            "bess": {
-                "action": bess_action,
-                "power_kw": round(bess_power_kw, 1),
-                "soc_pct": final_soc_pct,
-                "capacity_kwh": bess_state["capacity_kwh"],
-                "mode": bess_state["discom_override_mode"]
-            },
-            "carbon_offset_kg": carbon_saved,
-            "grid_status": grid_status
-        }
+    return {
+        "time_of_day": time_str,
+        "solar_kw": round(solar_kw, 1),
+        "raw_load_kw": round(raw_load_kw, 1),
+        "effective_load_kw": round(effective_load_kw, 1),
+        "peak_threshold_kw": peak_threshold_kw,
+        "ev_fleet": {
+            "load_kw": round(ev_load_kw, 1),
+            "mode": ev_mode,
+            "active_evs": 12 if ev_mode == "FAST" else (4 if ev_mode == "ECO" else 8)
+        },
+        "bess": {
+            "action": action,
+            "power_kw": round(bess_power_kw, 1),
+            "soc_pct": soc_pct,
+            "capacity_kwh": 500.0,
+            "mode": override
+        },
+        "carbon_offset_kg": round(accumulated_carbon_offset_kg, 2),
+        "cost_savings_inr": round(accumulated_cost_savings_inr, 2),
+        "grid_status": grid_status
+    }
