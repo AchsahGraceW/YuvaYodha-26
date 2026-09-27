@@ -76,7 +76,8 @@ export default function Home() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const res = await fetch(`http://localhost:8000/api/telemetry?override=${overrideMode}&ev_mode=${evMode}`);
+        const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://ecogrid-ai-backend.onrender.com';
+        const res = await fetch(`${API_URL}/api/telemetry?override=${overrideMode}&ev_mode=${evMode}`);
         if (!res.ok) return;
         const data: Telemetry = await res.json();
         setTelemetry(data);
